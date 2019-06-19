@@ -1,0 +1,370 @@
+{% extends 'base.html' %}
+{% block title %}IoT Smart Energy Dashboard{% endblock title %}
+{% block content %}
+{% if user.is_authenticated %}
+  <div class="row">
+    <div class="col-12">
+      <div class="card">
+        <div class="h card-body">
+          <div>
+            <div class="l">
+              <span class="b">Total Power Consumption <br>(In W)<br><span id="watt_usage"></span></span>
+            </div>
+            <span id="head" style="font-size: 26px; font-family:auto;">Live Data</span>
+            <span style="display:none; align:center" class="date-picker">
+              <span id="date_month" style="font-size: 20px; font-family: auto">Choose Date/Month: <input type="text" id="datepicker" ></span>
+            </span>
+            <div class="r">
+              <span class="b" onclick="updateCPU()">Total Bill <br>(In RS)<br>₹ <span id="rs_usage"></span></span>
+            </div>
+          </div>
+        </div>
+        <div class="card-body">
+          <canvas style="margin:auto;" id="myChart" width="600" height="400"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    var ip = "127.0.0.1";
+    var costPerUnit = 4.76;
+    Chart.defaults.global.elements.line.fill = false;
+    var ctx = document.getElementById("myChart");
+    ctx.height = 400;
+    ctx.width = 600;
+    var olddata = [0,0,0,0,0,0,0,0,0,0];
+    var olddata1 = [0,0,0,0,0,0,0,0,0,0];
+    var olddata2 = [0,0,0,0,0,0,0,0,0,0];
+    var newdata = [0,0,0,0,0,0,0,0,0,0];
+    var newdata1 = [0,0,0,0,0,0,0,0,0,0];
+    var newdata2 = [0,0,0,0,0,0,0,0,0,0];
+    var monthNames = ["January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December"
+    ];
+    var last_id = -1;
+    var cur=[], watt=[], vol=[], label=[];
+    var count=0;
+    var interval;
+    var intervals = [];
+    var intervalActive = 0;
+    var totalLiveWatt = 0;
+    var totalLiveBill = 0;
+    var d, m, y;
+    var callByMonth = 0;
+
+    var myChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels:  [0,0,0,0,0,0,0,0,0,0],
+        datasets: [{
+          label: 'Current',
+          data: olddata,
+          borderColor: 'rgb(46, 134, 193)',
+          backgroundColor : 'rgb(46, 134, 193)',
+          lineTension: 0,
+        },
+        {
+          label: 'Voltage',
+          data: olddata1,
+          borderColor: 'rgb(244, 208, 63)',
+          backgroundColor: 'rgb(244, 208, 63)',
+          lineTension: 0,
+        },
+        {
+          label: 'Watt',
+          data: olddata2,
+          borderColor: 'rgb(100, 30, 22)',
+          backgroundColor: 'rgb(100, 30, 22)',
+          lineTension: 0,
+        }]
+      },
+      options: {
+        hover: {
+          mode: 'nearest', 
+          intersect: true
+        },
+        tooltips: {
+          mode: 'index', 
+          intersect: false
+        },
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          yAxes: [{
+            display: true,
+            scaleLabel: {
+              display: true,
+              labelString: 'Units'
+            },
+            ticks: {
+              beginAtZero:true
+            }
+          }], 
+          xAxes:[{
+           display: true, 
+           scaleLabel: {
+             display: true,
+             labelString: 'Date/Time'
+           }
+         }],
+       }
+     }
+   });
+
+    function addValue(){
+      $.ajax({
+        type: 'GET', 
+        url: 'http://' + ip + ':8000/api/live/?last_id='+last_id, 
+        dataType: "json",
+        success: function(result, textStatus, jqXHR){
+          liveTotal(totalLiveWatt);
+          if(result.length == 0){
+            count++;
+            if (count>100) {
+              $('#head').html("<span id='m'>Device Offline</span>").show();
+            }
+          } else {
+            count = 0;
+            $('#head').html("<span id='m'>Live Data: <span id='s'>"+ new Date().toLocaleDateString("en-IN") +"</span></span>").show();
+            last_id = result[result.length-1].id;
+            /*if (cur.length > 15){
+              for(var i=0; i<(cur.length-15); i++){
+                cur.shift();
+                vol.shift();
+                watt.shift();
+                label.shift();
+              }
+            }*/
+            for(var i=0; i<result.length; i++){
+              cur.push(result[i].current.toFixed(2));
+              vol.push(result[i].voltage.toFixed(2));
+              watt.push(result[i].watt.toFixed(2));
+              label.push(tCon(result[i].ctime));
+              myChart.data.datasets[0].data = cur;
+              myChart.data.datasets[1].data = vol;
+              myChart.data.datasets[2].data = watt;
+              myChart.data.labels = label;
+              myChart.update(0);
+            }
+            if (myChart.data.labels.length > 15) {
+              myChart.data.labels.shift();
+              myChart.data.datasets[0].data.shift();
+              myChart.data.datasets[1].data.shift();
+              myChart.data.datasets[2].data.shift();
+              myChart.update(0);
+            }
+          }
+        }
+      })
+    }
+    function dailyUsage(d, m, y) { 
+      stopInterval();
+      $.ajax({
+        type: 'GET', 
+        url: 'http://' + ip + ':8000/api/daily/?day='+d+'&month='+m+'&year='+y, 
+        dataType: "json",
+        success: function(result, textStatus, jqXHR){
+          if(result.length == 0){
+            alert("No Data Found");
+          } else {
+            dailyTotal(d, m, y);
+            $('#head').html("<span id='m'>Date Wise Usage: <span id='s'>"+ d + "-" + monthNames[m-1]+"-" + y+"</span></span>").show();
+            $('.date-picker').css('display', 'none');
+            var cur = [], watt = [], vol = [], label = [];
+            for(var i=0; i<result.length; i++){
+              cur.push(result[i].current.toFixed(2));
+              vol.push(result[i].voltage.toFixed(2));
+              watt.push(result[i].watt.toFixed(2));
+              label.push(tCon(result[i].ctime));
+              myChart.data.datasets[0].data = cur;
+              myChart.data.datasets[1].data = vol;
+              myChart.data.datasets[2].data = watt;
+              myChart.data.labels = label;
+              myChart.update();
+            }
+          }
+        }
+      })
+    }
+
+    function dailyTotal(d, m, y){
+      $.ajax({
+        type: 'GET', 
+        url: 'http://' + ip + ':8000/api/daily/total/?day=' + d + '&month='+m+'&year='+y, 
+        dataType: "json",
+        success: function(result, textStatus, jqXHR){
+          $('#watt_usage').text(result.watt.toFixed(2));
+          $('#rs_usage').text(((result.watt)/1000*costPerUnit).toFixed(2));
+        }
+      })
+    }
+
+
+    function monthlyUsage(m, y) { 
+      stopInterval();
+      $.ajax({
+        type: 'GET', 
+        url: 'http://' + ip + ':8000/api/monthly/?month='+m+'&year='+y, 
+        dataType: "json",
+        success: function(result, textStatus, jqXHR){
+          if(result.length == 0){
+            alert("No Data Found");
+          } else {
+            monthlyTotal(m, y);
+            $('#head').html("<span id='m'>Monthly Usage: <span id='s'>"+ monthNames[m-1]+"-" + y+"</span></span>").show();
+            $('.date-picker').css('display', 'none');
+            var cur = [], watt = [], vol = [], label = [];
+            for(var i=0; i<result.length; i++){
+              cur.push(result[i].current.toFixed(2));
+              vol.push(result[i].voltage.toFixed(2));
+              watt.push(result[i].watt.toFixed(2));
+              label.push(dCon(result[i].cdate));
+              myChart.data.datasets[0].data = cur;
+              myChart.data.datasets[1].data = vol;
+              myChart.data.datasets[2].data = watt;
+              myChart.data.labels = label;
+              myChart.update();
+            }
+          }
+        }
+      })
+    }
+
+    function monthlyTotal(m, y){
+      $.ajax({
+        type: 'GET', 
+        url: 'http://' + ip + ':8000/api/monthly/total/?month='+m+'&year='+y, 
+        dataType: "json",
+        success: function(result, textStatus, jqXHR){
+          $('#watt_usage').text(result.watt.toFixed(2));
+          $('#rs_usage').text(((result.watt)/1000*costPerUnit).toFixed(2));
+        }
+      })
+    }
+
+    function liveTotal(){
+      $.ajax({
+        type: 'GET', 
+        url: 'http://' + ip + ':8000/api/live/total/', 
+        dataType: "json",
+        success: function(result, textStatus, jqXHR){
+          totalLiveWatt = result.watt;
+          $('#watt_usage').text(totalLiveWatt.toFixed(2));
+          $('#rs_usage').text(((totalLiveWatt)/1000*costPerUnit).toFixed(2));
+        }
+      })
+    }
+    
+    function updateCPU(){
+        newCost = parseFloat(prompt("Enter new cost per unit"));
+        if (parseFloat(newCost) === newCost)
+            costPerUnit = newCost;
+    }
+
+    $(function() {
+      $( "#datepicker" ).datepicker({
+        onSelect: function(dateText, inst){
+          var di = $(this).datepicker('getDate');
+          d = di.getDate();
+          m = di.getMonth()+1;
+          y = di.getYear() + 1900;
+          if(callByMonth)
+            monthlyUsage(m, y);
+          else
+            dailyUsage(d, m, y);
+        }
+      })
+    });
+
+    function hide(){
+      $('.toolsMenu').hide();
+    }
+    function show(){
+      $('.toolsMenu').show();
+    }
+
+    function startInterval(){
+      interval = setInterval(addValue, 1000);
+      intervals.push(interval);
+    }
+
+   function stopInterval() { 
+      for(i=0; i<intervals.length; i++)
+        clearInterval(intervals[i]);
+    }
+
+    function tCon(t){
+      var time = t.split(":");
+      hr = time[0];
+      var ampm = "am";
+      var nt; 
+      if (hr > 12) { 
+        hr = hr - 12;
+        ampm="pm";
+      }
+      return hr+":"+time[1]+":"+time[2].split(".")[0]+" "+ampm;
+    }
+
+    function dCon(d){
+      var date = d.split("-")
+      return date[2]+"-"+date[1]+"-"+date[0];
+    }
+
+    
+    
+    function live(){
+      $('#head').html("<span id='m'>Live Data: <span id='s'>"+ new Date().toLocaleDateString("en-IN") +"</span></span>").show();
+      last_id = -1;
+      intervalActive++;
+       if (intervalActive == 1){
+        startInterval();
+      } else {
+        return false;
+      }
+    }
+
+    function prev(){
+
+      stopInterval();
+      intervalActive = 0;
+      callByMonth = 1;
+      alert("Choose Month");
+ //     $('#date_month').text("Choose Month");
+      $('#excel').text("Convert Monthwise Data to Excel");
+      $('#head').hide();
+      $('.date-picker').css("display","inline").css("text-align", "center");
+    }
+
+    function daily(){
+      stopInterval();
+      intervalActive = 0;
+      callByMonth = 0;
+      alert("Choose Date");
+//      $('#date_month').text("Choose Date");
+      $('#excel').text("Convert Datewise Data to Excel");
+      $('#head').hide();
+      $('.date-picker').css("display","inline").css("text-align", "center");
+    }
+
+    function excel(){
+        if ($("#excel").text() == "Convert Live Data to Excel"){
+            window.location="http://" + ip + ":8000/conv2excel";
+        } 
+        else if ($("#excel").text() == "Convert Datewise Data to Excel"){
+            window.location="http://" + ip + ":8000/conv2excel/daily/?day=" + d + "&month=" + m + "&year=" + y;
+        }
+        else {
+            window.location="http://" + ip + ":8000/conv2excel/monthly/?month=" + m + "&year=" + y;
+        }
+    }
+
+    live();
+    liveTotal();
+  </script>
+
+  {% else %}
+  <p>You are not logged in</p>
+  <a href="{% url 'login' %}">Log In</a> | <a href="{% url 'signup' %}">Sign Up</a>
+  {% endif %}
+  {% endblock content %}
